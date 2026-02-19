@@ -730,6 +730,15 @@ def admin_dashboard():
         st.markdown("---")
         st.markdown("#### 📋 Current Students")
         
+        # Get students first
+        c.execute("""
+            SELECT s.id, s.name, c.name as centre, s.phone, s.join_date, s.is_active
+            FROM students s
+            JOIN centres c ON s.centre_id = c.id
+            ORDER BY c.name, s.name
+        """)
+        student_records = c.fetchall()
+        
         # Delete all test data button
         col1, col2 = st.columns([3, 1])
         with col1:
@@ -741,15 +750,6 @@ def admin_dashboard():
                 conn.commit()
                 st.success("All student and attendance data deleted!")
                 st.rerun()
-        
-        # View/Edit students
-        c.execute("""
-            SELECT s.id, s.name, c.name as centre, s.phone, s.join_date, s.is_active
-            FROM students s
-            JOIN centres c ON s.centre_id = c.id
-            ORDER BY c.name, s.name
-        """)
-        student_records = c.fetchall()
         
         if student_records:
             df_students = pd.DataFrame(student_records, columns=["ID", "Name", "Centre", "Phone", "Join Date", "Active"])
