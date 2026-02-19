@@ -15,6 +15,9 @@ st.set_page_config(
     layout="wide"
 )
 
+# WhatsApp Group Link (configurable)
+WHATSAPP_GROUP_LINK = "https://chat.whatsapp.com/GVddgv7E9G3BCFuCRK4LGI"
+
 import sqlite3
 import os
 from datetime import datetime, date
@@ -265,6 +268,9 @@ def mark_attendance_page():
             st.session_state.attendance_list = []
             st.rerun()
     
+    # WhatsApp Quick Access
+    st.markdown(f"<a href='{WHATSAPP_GROUP_LINK}' target='_blank'><button style='background-color:#25D366;color:white;padding:8px 16px;border:none;border-radius:5px;cursor:pointer;'>💬 Open WhatsApp Group</button></a>", unsafe_allow_html=True)
+    
     st.markdown("---")
     
     # Centre selection
@@ -408,9 +414,57 @@ def mark_attendance_page():
                     """, (student_id, selected_centre_id, date_str, selected_slot, status, coach["id"]))
             
             conn.commit()
-            st.success(f"✅ Attendance saved for {selected_slot}!")
+            
+            # Generate WhatsApp message
+            day_name = selected_date.strftime("%A")
+            date_display = selected_date.strftime("%d/%m/%Y")
+            centre_name = centre_names[selected_centre_id]
+            
+            # Group students by time slot
+            slot_students = {}
+            for student in st.session_state.attendance_list:
+                if student["status"] == "Present":
+                    slot = selected_slot
+                    if slot not in slot_students:
+                        slot_students[slot] = []
+                    slot_students[slot].append(student["name"])
+            
+            # Build WhatsApp message
+            wa_message = f"*{date_display}*\n*{centre_name}*\n*{day_name}*\n\n"
+            
+            for slot, students in slot_students.items():
+                wa_message += f"*{slot}*\n"
+                for idx, name in enumerate(students, 1):
+                    wa_message += f"{idx}. {name}\n"
+                wa_message += "\n"
+            
+            st.session_state.last_wa_message = wa_message
             st.session_state.attendance_list = []
             st.rerun()
+    
+    # Show WhatsApp message if exists
+    if hasattr(st.session_state, 'last_wa_message') and st.session_state.last_wa_message:
+        st.markdown("---")
+        st.markdown("### 📱 WhatsApp Message Generated!")
+        
+        wa_msg = st.session_state.last_wa_message
+        st.text_area("Copy this message:", value=wa_msg, height=150)
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            # Copy button using JavaScript
+            st.markdown(f"""
+            <button onclick="navigator.clipboard.writeText(document.querySelector('textarea[data-testid=\"stTextArea\"]').value); alert('Copied!')" 
+            style="background-color:#25D366;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;width:100%;">
+            📋 Copy to Clipboard
+            </button>
+            """, unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"<a href='{WHATSAPP_GROUP_LINK}' target='_blank'><button style='background-color:#128C7E;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;width:100%;'>💬 Open WhatsApp</button></a>", unsafe_allow_html=True)
+        with col3:
+            if st.button("Clear"):
+                st.session_state.last_wa_message = ""
+                st.rerun()
     else:
         st.info("👆 Select a batch above, search for students, and click 'Add Student' to mark attendance.")
 
