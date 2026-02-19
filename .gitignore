@@ -1,0 +1,5 @@
+believers_academy.db
+*.pyc
+__pycache__/
+.env
+*.log
