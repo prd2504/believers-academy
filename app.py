@@ -62,6 +62,10 @@ if not st.session_state.logged_in and "coach_id" in query_params:
     except:
         pass
 
+# Database path - works locally and on Render
+import os
+DB_PATH = os.environ.get('DATABASE_PATH', 'believers_academy.db')
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
