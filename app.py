@@ -15,15 +15,52 @@ st.set_page_config(
     layout="wide"
 )
 
+# Custom CSS for better UI
+st.markdown("""
+<style>
+    .stButton > button {
+        border-radius: 8px;
+    }
+    .main-header {
+        font-size: 2rem;
+        font-weight: bold;
+        color: #FF6B35;
+        text-align: center;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # WhatsApp Group Link (configurable)
 WHATSAPP_GROUP_LINK = "https://chat.whatsapp.com/GVddgv7E9G3BCFuCRK4LGI"
 
-import sqlite3
-import os
-from datetime import datetime, date
+# Initialize session state for remember me
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "coach" not in st.session_state:
+    st.session_state.coach = None
+if "remember_me" not in st.session_state:
+    st.session_state.remember_me = False
 
-# Database path - works locally and on Render
-DB_PATH = os.environ.get('DATABASE_PATH', 'believers_academy.db')
+# Check for stored credentials on page load (using query params)
+query_params = st.query_params
+if not st.session_state.logged_in and "coach_id" in query_params:
+    try:
+        coach_id = int(query_params["coach_id"])
+        c = conn.cursor()
+        c.execute("SELECT id, name, pin, role, assigned_centre_id FROM coaches WHERE id = ?", (coach_id,))
+        coach = c.fetchone()
+        if coach:
+            st.session_state.logged_in = True
+            st.session_state.coach = {
+                "id": coach[0],
+                "name": coach[1],
+                "role": coach[3],
+                "assigned_centre_id": coach[4]
+            }
+            # Clear query params
+            st.query_params.clear()
+    except:
+        pass
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -134,12 +171,6 @@ def seed_data(conn):
 conn = init_db()
 seed_data(conn)
 
-# Session state
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "coach" not in st.session_state:
-    st.session_state.coach = None
-
 # CSS for styling
 st.markdown("""
 <style>
@@ -201,6 +232,7 @@ def login():
         
         coach_name = st.selectbox("Select Your Name", coaches)
         pin = st.text_input("Enter 4-digit PIN", type="password")
+        remember_me = st.checkbox("Remember Me (stay logged in)")
         
         if st.button("Login", type="primary"):
             c.execute("SELECT id, name, pin, role, assigned_centre_id FROM coaches WHERE name = ?", (coach_name,))
@@ -214,6 +246,11 @@ def login():
                     "role": coach[3],
                     "assigned_centre_id": coach[4]
                 }
+                
+                # If remember me is checked, set query param
+                if remember_me:
+                    st.query_params["coach_id"] = str(coach[0])
+                
                 st.rerun()
             else:
                 st.error("Invalid PIN. Please try again.")
@@ -269,6 +306,7 @@ def mark_attendance_page():
             st.session_state.coach = None
             st.session_state.all_slot_attendance = {}
             st.session_state.attendance_saved = False
+            st.query_params.clear()  # Clear remember me
             st.rerun()
     
     # WhatsApp Quick Access
