@@ -242,11 +242,13 @@ def mark_attendance_page():
         st.markdown("🏸")
     coach = st.session_state.coach
     
-    # Initialize session state for attendance
-    if "attendance_list" not in st.session_state:
-        st.session_state.attendance_list = []
-    if "current_slot" not in st.session_state:
-        st.session_state.current_slot = None
+    # Initialize session state for attendance - stores ALL slots
+    if "all_slot_attendance" not in st.session_state:
+        st.session_state.all_slot_attendance = {}
+    if "attendance_saved" not in st.session_state:
+        st.session_state.attendance_saved = False
+    if "last_wa_message" not in st.session_state:
+        st.session_state.last_wa_message = ""
     
     # Get accessible centres
     c = conn.cursor()
@@ -265,13 +267,41 @@ def mark_attendance_page():
         if st.button("Logout", type="secondary", key="logout_main"):
             st.session_state.logged_in = False
             st.session_state.coach = None
-            st.session_state.attendance_list = []
+            st.session_state.all_slot_attendance = {}
+            st.session_state.attendance_saved = False
             st.rerun()
     
     # WhatsApp Quick Access
     st.markdown(f"<a href='{WHATSAPP_GROUP_LINK}' target='_blank'><button style='background-color:#25D366;color:white;padding:8px 16px;border:none;border-radius:5px;cursor:pointer;'>💬 Open WhatsApp Group</button></a>", unsafe_allow_html=True)
     
     st.markdown("---")
+    
+    # Show WhatsApp message if saved
+    if st.session_state.last_wa_message:
+        st.markdown("### 📱 WhatsApp Message")
+        st.code(st.session_state.last_wa_message, language=None)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            copy_btn = st.button("📋 Copy Message", key="copy_wa_final")
+        with col2:
+            st.markdown(f"<a href='{WHATSAPP_GROUP_LINK}' target='_blank'><button style='background-color:#25D366;color:white;padding:8px 16px;border:none;border-radius:5px;cursor:pointer;width:100%;'>💬 Open WhatsApp</button></a>", unsafe_allow_html=True)
+        
+        if copy_btn:
+            st.markdown("""
+            <script>
+            navigator.clipboard.writeText(document.querySelector('pre').innerText);
+            </script>
+            """, unsafe_allow_html=True)
+            st.success("Copied! Paste in WhatsApp")
+        
+        if st.button("🔄 Start New Day"):
+            st.session_state.all_slot_attendance = {}
+            st.session_state.attendance_saved = False
+            st.session_state.last_wa_message = ""
+            st.rerun()
+        
+        return
     
     # Centre selection
     if not centres:
@@ -281,11 +311,12 @@ def mark_attendance_page():
     centre_names = {c[0]: c[1] for c in centres}
     centre_options = [f"{c[0]} - {c[1]} - {c[2]}" for c in centres]
     
-    selected_centre_option = st.selectbox("Select Centre", centre_options)
+    selected_centre_option = st.selectbox("Select Centre", centre_options, key="centre_select")
     selected_centre_id = int(selected_centre_option.split(" - ")[0].strip())
     
     # Date selection (default today)
     selected_date = st.date_input("Select Date", value=date.today(), min_value=date(2025, 1, 1))
+    date_key = selected_date.isoformat()
     
     # Get time slots
     time_slots = get_time_slots(selected_centre_id, selected_date)
@@ -294,124 +325,149 @@ def mark_attendance_page():
         st.warning("No time slots configured for this centre on this day.")
         return
     
-    # Time slot selection (BATCH FIRST)
-    selected_slot = st.selectbox("Select Batch/Time Slot", time_slots, key="slot_select")
+    # Initialize slot if not exists
+    for slot in time_slots:
+        slot_key = f"{date_key}_{selected_centre_id}_{slot}"
+        if slot_key not in st.session_state.all_slot_attendance:
+            st.session_state.all_slot_attendance[slot_key] = {
+                "students": [],
+                "no_students": False
+            }
     
-    # Get all students for this centre for the dropdown
+    # Get all students for this centre
     c.execute("SELECT id, name FROM students WHERE centre_id = ? AND is_active = 1 ORDER BY name", (selected_centre_id,))
     all_students = c.fetchall()
-    student_options = {s[1]: s[0] for s in all_students}  # name -> id
+    student_options = {s[1]: s[0] for s in all_students}
     
-    # Reset attendance list when slot changes
-    if selected_slot != st.session_state.current_slot:
-        st.session_state.current_slot = selected_slot
-        st.session_state.attendance_list = []
+    st.markdown(f"### 🏸 Mark Attendance - {centre_names[selected_centre_id]}")
+    st.markdown(f"**Date:** {selected_date.strftime('%d/%m/%Y')} ({selected_date.strftime('%A')})")
     
-    # Check what's already saved for this slot
-    c.execute("""
-        SELECT student_id, status FROM attendance 
-        WHERE centre_id = ? AND date = ? AND time_slot = ?
-    """, (selected_centre_id, selected_date.isoformat(), selected_slot))
-    existing = {row[0]: row[1] for row in c.fetchall()}
+    # Build session key for current selections
+    session_key = f"{date_key}_{selected_centre_id}"
     
-    # Pre-populate from existing records
-    if st.session_state.attendance_list == [] and existing:
-        for student_id, status in existing.items():
-            c.execute("SELECT name FROM students WHERE id = ?", (student_id,))
-            row = c.fetchone()
-            if row:
-                st.session_state.attendance_list.append({
-                    "student_id": student_id,
-                    "name": row[0],
-                    "status": status
-                })
+    # Process each time slot
+    all_slots_completed = True
     
-    st.markdown("### Mark Attendance")
-    st.markdown(f"**Centre:** {centre_names[selected_centre_id]} | **Date:** {selected_date} | **Slot:** {selected_slot}")
-    
-    if not all_students:
-        st.warning("No students registered for this centre yet.")
-        return
-    
-    # Searchable student dropdown
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        search_query = st.text_input("Search Student", placeholder="Type name to search...")
-    with col2:
-        st.markdown("###")  # spacing
-    
-    # Filter students based on search
-    if search_query:
-        filtered_students = [s for s in all_students if search_query.lower() in s[1].lower()]
-    else:
-        filtered_students = all_students
-    
-    student_dropdown = [s[1] for s in filtered_students]
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        selected_student = st.selectbox("Select Student", student_dropdown, key="student_select")
-    with col2:
-        if st.button("➕ Add Student", type="primary"):
-            if selected_student:
-                # Check if already added
-                already_added = any(s["name"] == selected_student for s in st.session_state.attendance_list)
-                if not already_added:
-                    st.session_state.attendance_list.append({
-                        "student_id": student_options[selected_student],
-                        "name": selected_student,
-                        "status": "Present"
-                    })
-                else:
-                    st.warning(f"{selected_student} already added!")
-    
-    st.markdown("---")
-    st.markdown("#### Students in this Batch")
-    
-    # Display added students with status
-    if st.session_state.attendance_list:
-        for i, student in enumerate(st.session_state.attendance_list):
-            col1, col2, col3 = st.columns([3, 2, 1])
-            with col1:
-                st.markdown(f"**{student['name']}**")
-            with col2:
-                new_status = st.selectbox(
-                    "Status",
-                    ["Present", "Absent", "Leave"],
-                    index=["Present", "Absent", "Leave"].index(student["status"]),
-                    key=f"status_{i}_{selected_slot}",
-                    label_visibility="collapsed"
-                )
-                st.session_state.attendance_list[i]["status"] = new_status
-            with col3:
-                if st.button("🗑️", key=f"del_{i}_{selected_slot}"):
-                    st.session_state.attendance_list.pop(i)
-                    st.rerun()
+    for slot_idx, selected_slot in enumerate(time_slots):
+        slot_key = f"{date_key}_{selected_centre_id}_{selected_slot}"
+        slot_data = st.session_state.all_slot_attendance.get(slot_key, {"students": [], "no_students": False})
         
         st.markdown("---")
-        if st.button("💾 Save Attendance", type="primary", use_container_width=True):
-            date_str = selected_date.isoformat()
-            for student in st.session_state.attendance_list:
-                student_id = student["student_id"]
-                status = student["status"]
+        with st.expander(f"**⏰ {selected_slot}**", expanded=True):
+            # Check if this slot has "No Students"
+            no_students = slot_data.get("no_students", False)
+            no_students_toggle = st.checkbox("No students in this slot", value=no_students, key=f"no_students_{slot_key}")
+            
+            if no_students_toggle:
+                st.session_state.all_slot_attendance[slot_key] = {
+                    "students": [],
+                    "no_students": True
+                }
+                st.info("Marked as: No students")
+            else:
+                # Students in this slot
+                students_list = slot_data.get("students", [])
                 
-                # Check if entry exists
-                c.execute("""
-                    SELECT id FROM attendance 
-                    WHERE student_id = ? AND centre_id = ? AND date = ? AND time_slot = ?
-                """, (student_id, selected_centre_id, date_str, selected_slot))
-                existing_entry = c.fetchone()
+                # Search and add student
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    search_query = st.text_input(f"Search Student for {selected_slot}", placeholder="Type name...", key=f"search_{slot_key}")
+                with col2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("➕ Add", key=f"add_btn_{slot_key}", type="primary"):
+                        pass  # Will handle below
                 
-                if existing_entry:
-                    c.execute("""
-                        UPDATE attendance SET status = ?, coach_id = ? 
-                        WHERE student_id = ? AND centre_id = ? AND date = ? AND time_slot = ?
-                    """, (status, coach["id"], student_id, selected_centre_id, date_str, selected_slot))
+                # Filter students
+                if search_query:
+                    filtered_students = [s for s in all_students if search_query.lower() in s[1].lower()]
                 else:
+                    filtered_students = all_students
+                
+                student_dropdown = [s[1] for s in filtered_students]
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    selected_student = st.selectbox("Select Student", student_dropdown, key=f"student_select_{slot_key}")
+                with col2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("➕ Add", key=f"add_{slot_key}"):
+                        if selected_student:
+                            already_added = any(s["name"] == selected_student for s in students_list)
+                            if not already_added:
+                                students_list.append({
+                                    "student_id": student_options[selected_student],
+                                    "name": selected_student,
+                                    "status": "Present"
+                                })
+                                st.session_state.all_slot_attendance[slot_key]["students"] = students_list
+                                st.rerun()
+                            else:
+                                st.warning(f"{selected_student} already added!")
+                
+                # Show added students
+                if students_list:
+                    st.markdown("**Students in this slot:**")
+                    for i, student in enumerate(students_list):
+                        col1, col2, col3 = st.columns([3, 2, 1])
+                        with col1:
+                            st.markdown(f"**{student['name']}**")
+                        with col2:
+                            new_status = st.selectbox(
+                                "Status",
+                                ["Present", "Absent", "Leave"],
+                                index=["Present", "Absent", "Leave"].index(student["status"]),
+                                key=f"status_{slot_key}_{i}",
+                                label_visibility="collapsed"
+                            )
+                            students_list[i]["status"] = new_status
+                        with col3:
+                            if st.button("🗑️", key=f"del_{slot_key}_{i}"):
+                                students_list.pop(i)
+                                st.session_state.all_slot_attendance[slot_key]["students"] = students_list
+                                st.rerun()
+                    
+                    # Save to session
+                    st.session_state.all_slot_attendance[slot_key]["students"] = students_list
+                else:
+                    all_slots_completed = False
+                    st.info("No students added yet")
+    
+    st.markdown("---")
+    
+    # Save button - only enabled when all slots have students or marked as no students
+    if all_slots_completed:
+        if st.button("💾 SAVE ATTENDANCE", type="primary", use_container_width=True):
+            date_str = selected_date.isoformat()
+            
+            for selected_slot in time_slots:
+                slot_key = f"{date_key}_{selected_centre_id}_{selected_slot}"
+                slot_data = st.session_state.all_slot_attendance.get(slot_key, {"students": [], "no_students": False})
+                
+                if slot_data.get("no_students", False):
+                    continue
+                
+                students_list = slot_data.get("students", [])
+                for student in students_list:
+                    student_id = student["student_id"]
+                    status = student["status"]
+                    
+                    # Check if entry exists
                     c.execute("""
-                        INSERT INTO attendance (student_id, centre_id, date, time_slot, status, coach_id)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (student_id, selected_centre_id, date_str, selected_slot, status, coach["id"]))
+                        SELECT id FROM attendance 
+                        WHERE student_id = ? AND centre_id = ? AND date = ? AND time_slot = ?
+                    """, (student_id, selected_centre_id, date_str, selected_slot))
+                    existing_entry = c.fetchone()
+                    
+                    if existing_entry:
+                        c.execute("""
+                            UPDATE attendance SET status = ?, coach_id = ? 
+                            WHERE student_id = ? AND centre_id = ? AND date = ? AND time_slot = ?
+                        """, (status, coach["id"], student_id, selected_centre_id, date_str, selected_slot))
+                    else:
+                        c.execute("""
+                            INSERT INTO attendance (student_id, centre_id, date, time_slot, status, coach_id)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (student_id, selected_centre_id, date_str, selected_slot, status, coach["id"]))
             
             conn.commit()
             
@@ -421,52 +477,34 @@ def mark_attendance_page():
             centre_name = centre_names[selected_centre_id]
             
             # Group students by time slot
-            slot_students = {}
-            for student in st.session_state.attendance_list:
-                if student["status"] == "Present":
-                    slot = selected_slot
-                    if slot not in slot_students:
-                        slot_students[slot] = []
-                    slot_students[slot].append(student["name"])
-            
-            # Build WhatsApp message
             wa_message = f"*{date_display}*\n*{centre_name}*\n*{day_name}*\n\n"
             
-            for slot, students in slot_students.items():
-                wa_message += f"*{slot}*\n"
-                for idx, name in enumerate(students, 1):
-                    wa_message += f"{idx}. {name}\n"
-                wa_message += "\n"
+            for slot in time_slots:
+                slot_key = f"{date_key}_{selected_centre_id}_{slot}"
+                slot_data = st.session_state.all_slot_attendance.get(slot_key, {"students": [], "no_students": False})
+                
+                if slot_data.get("no_students", False):
+                    continue
+                
+                students_list = slot_data.get("students", [])
+                present_students = [s for s in students_list if s["status"] == "Present"]
+                
+                if present_students:
+                    wa_message += f"*{slot}*\n"
+                    for idx, s in enumerate(present_students, 1):
+                        wa_message += f"{idx}. {s['name']}\n"
+                    wa_message += "\n"
             
             st.session_state.last_wa_message = wa_message
-            st.session_state.attendance_list = []
+            st.session_state.attendance_saved = True
             st.rerun()
-    
-    # Show WhatsApp message if exists
-    if hasattr(st.session_state, 'last_wa_message') and st.session_state.last_wa_message:
-        st.markdown("---")
-        st.markdown("### 📱 WhatsApp Message Generated!")
-        
-        wa_msg = st.session_state.last_wa_message
-        st.text_area("Copy this message:", value=wa_msg, height=150)
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            # Copy button using JavaScript
-            st.markdown(f"""
-            <button onclick="navigator.clipboard.writeText(document.querySelector('textarea[data-testid=\"stTextArea\"]').value); alert('Copied!')" 
-            style="background-color:#25D366;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;width:100%;">
-            📋 Copy to Clipboard
-            </button>
-            """, unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"<a href='{WHATSAPP_GROUP_LINK}' target='_blank'><button style='background-color:#128C7E;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;width:100%;'>💬 Open WhatsApp</button></a>", unsafe_allow_html=True)
-        with col3:
-            if st.button("Clear"):
-                st.session_state.last_wa_message = ""
-                st.rerun()
     else:
-        st.info("👆 Select a batch above, search for students, and click 'Add Student' to mark attendance.")
+        st.warning("⚠️ Please add students to all time slots (or mark them as 'No students') before saving.")
+    
+    # Clear all button
+    if st.button("🗑️ Clear All"):
+        st.session_state.all_slot_attendance = {}
+        st.rerun()
 
 def admin_dashboard():
     try:
