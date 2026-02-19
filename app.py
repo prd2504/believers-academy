@@ -154,20 +154,20 @@ def seed_data(conn):
     # Check if students exist
     c.execute("SELECT COUNT(*) FROM students")
     if c.fetchone()[0] == 0:
-        # Seed sample students
+        # Seed sample students (no parent phone - just name and mobile)
         students = [
-            ("Aarav Sharma", 1, "9876543210", "9876543211", "2026-01-01"),
-            ("Vihaan Patel", 1, "9876543212", "9876543213", "2026-01-01"),
-            ("Arnav Singh", 1, "9876543214", "9876543215", "2026-01-05"),
-            ("Sai Kulkarni", 2, "9876543216", "9876543217", "2026-01-02"),
-            ("Reyansh Joshi", 2, "9876543218", "9876543219", "2026-01-03"),
-            ("Ayaan Desai", 2, "9876543220", "9876543221", "2026-01-04"),
-            ("Krishna Gawde", 4, "9876543222", "9876543223", "2026-01-06"),
-            ("OM Shinde", 4, "9876543224", "9876543225", "2026-01-07"),
-            ("Pranav Nair", 1, "9876543226", "9876543227", "2026-01-08"),
-            ("Kartik Iyer", 2, "9876543228", "9876543229", "2026-01-09"),
+            ("Aarav Sharma", 1, "9876543210", "2026-01-01"),
+            ("Vihaan Patel", 1, "9876543212", "2026-01-01"),
+            ("Arnav Singh", 1, "9876543214", "2026-01-05"),
+            ("Sai Kulkarni", 2, "9876543216", "2026-01-02"),
+            ("Reyansh Joshi", 2, "9876543218", "2026-01-03"),
+            ("Ayaan Desai", 2, "9876543220", "2026-01-04"),
+            ("Krishna Gawde", 4, "9876543222", "2026-01-06"),
+            ("OM Shinde", 4, "9876543224", "2026-01-07"),
+            ("Pranav Nair", 1, "9876543226", "2026-01-08"),
+            ("Kartik Iyer", 2, "9876543228", "2026-01-09"),
         ]
-        c.executemany("INSERT INTO students (name, centre_id, phone, parent_phone, join_date) VALUES (?, ?, ?, ?, ?)", students)
+        c.executemany("INSERT INTO students (name, centre_id, phone, join_date) VALUES (?, ?, ?, ?)", students)
     
     conn.commit()
 
@@ -633,43 +633,118 @@ def admin_dashboard():
         # Manage Students
         st.markdown("### 👥 Student Management")
         
-        # Upload students
-        with st.expander("📤 Upload Students (CSV)"):
+        # Upload students via file or paste
+        with st.expander("📤 Upload Students (CSV)", expanded=True):
             st.markdown("""
-            **CSV Format:** `name, phone, parent_phone`
+            **CSV Format:** Just `name, mobile_number`
             
             Example:
             ```
-            Rahul Sharma, 9876543210, 9876543211
-            Aditi Patel, 9876543212, 9876543213
+            Rahul Sharma, 9876543210
+            Aditi Patel, 9876543212
             ```
+            Or upload a .csv file
             """)
-            csv_text = st.text_area("Paste CSV data (or enter manually)", height=150)
-            centre_for_upload = st.selectbox("Centre", [c[1] for c in all_centres])
             
-            if st.button("Upload Students"):
+            col1, col2 = st.columns(2)
+            with col1:
+                uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+            with col2:
+                centre_for_upload = st.selectbox("Centre for new students", [c[1] for c in all_centres])
+            
+            if uploaded_file is not None:
+                try:
+                    df_upload = pd.read_csv(uploaded_file)
+                    st.write("Preview:", df_upload.head())
+                    
+                    if st.button("✅ Import Students from File"):
+                        centre_id = int(centre_for_upload.split(" - ")[0]) if " - " in centre_for_upload else 1
+                        imported = 0
+                        for _, row in df_upload.iterrows():
+                            try:
+                                name = str(row.iloc[0]).strip()
+                                phone = str(row.iloc[1]).strip() if len(row) > 1 else ""
+                                c.execute("""
+                                    INSERT INTO students (name, centre_id, phone, join_date)
+                                    VALUES (?, ?, ?, ?)
+                                """, (name, centre_id, phone, date.today().isoformat()))
+                                imported += 1
+                            except:
+                                pass
+                        conn.commit()
+                        st.success(f"Imported {imported} students!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error reading file: {e}")
+            
+            st.markdown("---")
+            st.markdown("**Or paste CSV data:**")
+            csv_text = st.text_area("Paste names and mobile numbers", height=100, placeholder="Rahul Sharma, 9876543210\nAditi Patel, 9876543212")
+            
+            if st.button("📋 Import Pasted Data"):
                 if csv_text:
                     lines = csv_text.strip().split("\n")
+                    centre_id = int(centre_for_upload.split(" - ")[0]) if " - " in centre_for_upload else 1
+                    imported = 0
                     for line in lines:
                         parts = [p.strip() for p in line.split(",")]
-                        if len(parts) >= 1:
+                        if len(parts) >= 1 and parts[0]:
                             name = parts[0]
                             phone = parts[1] if len(parts) > 1 else ""
-                            parent_phone = parts[2] if len(parts) > 2 else ""
                             try:
                                 c.execute("""
-                                    INSERT INTO students (name, centre_id, phone, parent_phone, join_date)
-                                    VALUES (?, ?, ?, ?, ?)
-                                """, (name, int(centre_for_upload.split(" - ")[0]) if " - " in centre_for_upload else 1, phone, parent_phone, date.today().isoformat()))
+                                    INSERT INTO students (name, centre_id, phone, join_date)
+                                    VALUES (?, ?, ?, ?)
+                                """, (name, centre_id, phone, date.today().isoformat()))
+                                imported += 1
                             except:
-                                pass  # Skip duplicates
+                                pass
                     conn.commit()
-                    st.success(f"Uploaded {len(lines)} students!")
+                    st.success(f"Imported {imported} students!")
                     st.rerun()
+        
+        # Add single student
+        with st.expander("➕ Add Single Student"):
+            col1, col2 = st.columns(2)
+            with col1:
+                new_name = st.text_input("Student Name")
+            with col2:
+                new_phone = st.text_input("Mobile Number")
+            new_centre = st.selectbox("Centre", [c[1] for c in all_centres], key="new_student_centre")
+            
+            if st.button("➕ Add Student"):
+                if new_name:
+                    centre_id = int(new_centre.split(" - ")[0]) if " - " in new_centre else 1
+                    try:
+                        c.execute("""
+                            INSERT INTO students (name, centre_id, phone, join_date)
+                            VALUES (?, ?, ?, ?)
+                        """, (new_name, centre_id, new_phone, date.today().isoformat()))
+                        conn.commit()
+                        st.success(f"Added {new_name}!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+        
+        # View/Delete students
+        st.markdown("---")
+        st.markdown("#### 📋 Current Students")
+        
+        # Delete all test data button
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"**Total Students: {len(student_records)}**")
+        with col2:
+            if st.button("🗑️ Delete All Test Data", type="secondary"):
+                c.execute("DELETE FROM students")
+                c.execute("DELETE FROM attendance")
+                conn.commit()
+                st.success("All student and attendance data deleted!")
+                st.rerun()
         
         # View/Edit students
         c.execute("""
-            SELECT s.id, s.name, c.name as centre, s.phone, s.parent_phone, s.join_date, s.is_active
+            SELECT s.id, s.name, c.name as centre, s.phone, s.join_date, s.is_active
             FROM students s
             JOIN centres c ON s.centre_id = c.id
             ORDER BY c.name, s.name
@@ -677,7 +752,7 @@ def admin_dashboard():
         student_records = c.fetchall()
         
         if student_records:
-            df_students = pd.DataFrame(student_records, columns=["ID", "Name", "Centre", "Phone", "Parent Phone", "Join Date", "Active"])
+            df_students = pd.DataFrame(student_records, columns=["ID", "Name", "Centre", "Phone", "Join Date", "Active"])
             st.dataframe(df_students, use_container_width=True)
             
             # Delete student
